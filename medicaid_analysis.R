@@ -1,7 +1,9 @@
 library(glmnet)
 library(tidyverse)
 library(plyr)
-library(reshape)
+library(reshape2)
+library(dplyr)
+library(DAAG)
 
 setwd("~/fall2019/elections_campaigns/medicaid-expansion")
 
@@ -28,9 +30,9 @@ lobbying_full <- join(lobbying_full, state_sc, by= "state", type = "left") %>%
 
 ## business services are repeated (were broken up from which businesses contributed)
 # group by and sum these contributions
-lobbying_full %>%
-  group_by(Spender_Industry, year, state) %>% 
-  summarise(lobbying_spend = sum(lobbying_spend),
+lobbying_full <- lobbying_full %>%
+  dplyr::group_by(Spender_Industry, year, state) %>% 
+  dplyr::summarise(lobbying_spend = sum(lobbying_spend),
             num_contributions = sum(num_contributions))
 
 # The arguments to spread():
@@ -39,7 +41,15 @@ lobbying_full %>%
 # - value: Name of column containing values
 
 reshape1 <- select(lobbying_full,-c("num_contributions"))
-lobbying_wide <- spread(reshape1, Spender_Industry, lobbying_spend)
+reshape2 <- select(lobbying_full, -c( "lobbying_spend"))
+
+lobbying_wide1 <- spread(reshape1, Spender_Industry, lobbying_spend) %>%
+  rename_at(vars(-state, -year), function(x) paste0(x, "_lobby_spend"))
+
+lobbying_wide2 <- spread(reshape2, Spender_Industry, num_contributions) %>%
+  rename_at(vars(-state, -year), function(x) paste0(x, "_lobby_num"))
+
+lobbying_wide <- full_join(lobbying_wide1 , lobbying_wide2, by = c("year", "state")) 
 
 ## Join to medicaid data
 medicaid <- read_csv("medicaid-data.csv")
@@ -49,7 +59,7 @@ medicaid$pct_urban <- medicaid$pct_urban/100
 medicaid$pct_unemployed <- medicaid$pct_unemployed/100
 
 ## Join in lobbying data
-medicaid <- join(medicaid, lobbying_full, by = c("state", "year"))
+medicaid <- left_join(medicaid, lobbying_wide, by = c("state", "year"))
 
 ## Read in population data and merge with states
 population <- read_csv("population_states.csv") %>%
@@ -60,14 +70,73 @@ population <- read_csv("population_states.csv") %>%
 population <- population %>% filter(!NAME %in% 
                        c("United States", "Northeast Region", "Midwest Region",
                            "South Region", "West Region", "Puerto Rico")) %>%
-  rename(c("NAME" = "state")) 
+  rename(c("NAME" = "state")) %>%
+  rename_at(vars(-state), function(x) substr(x, 12, nchar(x)))
 
-population <- population[order(population$state),]
-pop <- melt(population) 
+pop <- reshape2::melt(population) 
+pop$state[pop$state == "District of Columbia"] <- "DC"
+pop <- rename(pop, c("value" = "population",
+                     "variable" = "year"))
+pop$year <- as.numeric(as.character(pop$year))
 
+medicaid <- left_join(medicaid, pop, by = c("state", "year"))
 
-table(medicaid$Spender_Industry)
+## divide by population for certain variables
+pop_dep_vars <- c("budget-surplus"                         
+                  ,"Business Services_lobby_spend",                "Conservative Policy Organization_lobby_spend" 
+                  ,"Drug Policy_lobby_spend",                       "General Trade Unions_lobby_spend"             
+                  ,"Health & Welfare Policy_lobby_spend",           "Health Professionals_lobby_spend"             
+                  ,"Health Services_lobby_spend",                   "Hospitals & Nursing Homes_lobby_spend"        
+                  ,"Liberal Policy Organization_lobby_spend",       "Miscellaneous Health_lobby_spend"             
+                  ,"Pharmaceuticals & Health Products_lobby_spend", "Public Sector Unions_lobby_spend"             
+                  ,"Transportation Unions_lobby_spend",             "expansion-beneficiaries")
 
+medicaid[,pop_dep_vars]/medicaid['population']
+medicaid <- mutate_at(medicaid, pop_dep_vars, function(x) (1000*x/medicaid$population))
 
+lobby_vars <- c("Business Services_lobby_spend",                "Conservative Policy Organization_lobby_spend" 
+                ,"Drug Policy_lobby_spend",                       "General Trade Unions_lobby_spend"             
+                ,"Health & Welfare Policy_lobby_spend",           "Health Professionals_lobby_spend"             
+                ,"Health Services_lobby_spend",                   "Hospitals & Nursing Homes_lobby_spend"        
+                ,"Liberal Policy Organization_lobby_spend",       "Miscellaneous Health_lobby_spend"             
+                ,"Pharmaceuticals & Health Products_lobby_spend", "Public Sector Unions_lobby_spend"             
+                ,"Transportation Unions_lobby_spend", "Conservative Policy Organization_lobby_num",    "Drug Policy_lobby_num"                        
+                ,"General Trade Unions_lobby_num",                "Health & Welfare Policy_lobby_num"            
+                ,"Health Professionals_lobby_num",                "Health Services_lobby_num"                    
+                ,"Hospitals & Nursing Homes_lobby_num",         "Liberal Policy Organization_lobby_num"        
+                ,"Miscellaneous Health_lobby_num",                "Pharmaceuticals & Health Products_lobby_num"  
+                ,"Public Sector Unions_lobby_num",             "Transportation Unions_lobby_num", "Business Services_lobby_num")
 
+## fill nas with 0 where appropriate (all lobbying variables)
+medicaid <- mutate_at(medicaid, lobby_vars, function(x) replace_na(x, 0))
+medicaid$pct_gop_senate <- as.numeric(medicaid$pct_gop_senate)
+medicaid$pct_trump_2016 <- as.numeric(medicaid$pct_trump_2016)
 
+## LASSO TIME
+
+full_model <- lm(expanded_medicaid ~ . -expanded_medicaid -state -year, data = medicaid)
+summary(full_model)
+# store outcome variable
+y <- medicaid$expanded_medicaid
+# you have to pass a model.matrix object to glmnet functions: dataset and functional form
+X <- model.matrix(full_model, medicaid)
+n <- length(y)
+
+## LASSO WITH ALPHA = 1
+# CV to find optimal lambda
+# glm = generalized linear model 
+# we pass model matrix, dependent variable, and parameters
+# family = binomial for binary dependent variable
+# nfold = 10: 10-fold cross-validation
+# alpha = 1: mixing parameter. 1 is lasso, 0 is ridge, between 0 and 1 is mixture (elastic net)
+cv1 <- cv.glmnet(X, y, 
+                 family = "binomial", 
+                 nfold = 10, 
+                 alpha = 1)
+plot(cv1) # viz cv
+ 
+ 
+ 
+ 
+ 
+ 
