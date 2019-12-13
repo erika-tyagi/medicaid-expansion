@@ -1,11 +1,12 @@
+setwd("~/fall2019/elections_campaigns/medicaid-expansion")
+
 library(glmnet)
 library(tidyverse)
 library(plyr)
 library(reshape2)
 library(dplyr)
-library(DAAG)
+library(coefplot)
 
-setwd("~/fall2019/elections_campaigns/medicaid-expansion")
 
 ## Read in Data
 lobby_1 <- read_csv("lobbyist_spending_by_state.csv") 
@@ -112,14 +113,28 @@ medicaid <- mutate_at(medicaid, lobby_vars, function(x) replace_na(x, 0))
 medicaid$pct_gop_senate <- as.numeric(medicaid$pct_gop_senate)
 medicaid$pct_trump_2016 <- as.numeric(medicaid$pct_trump_2016)
 
-## LASSO TIME
+## impute nebraska
+medicaid$pct_gop_senate[medicaid$state == "Nebraska"] <- .625 
+medicaid$pct_gop_house[medicaid$state == "Nebraska"] <- .625 
 
-full_model <- lm(expanded_medicaid ~ . -expanded_medicaid -state -year, data = medicaid)
-summary(full_model)
+## impute trump numbers
+trump_by_states <- dplyr::group_by(na.omit(medicaid), state) %>%
+  dplyr::summarize(pct_trump_2016 = min(pct_trump_2016))
+
+medicaid_im <- medicaid %>% select(-c("pct_trump_2016")) %>%
+  left_join(trump_by_states, by = c("state" = "state")) %>%
+  select(-c("pct_unemployed"))
+
+
+########### MODEL 1 ALL YEARS ALL STATES
+#drop na to see
+df <- na.omit(medicaid_im)
+full_model <- lm(expanded_medicaid ~ . -expanded_medicaid -state -year -population, data = df)
 # store outcome variable
-y <- medicaid$expanded_medicaid
+y <- df$expanded_medicaid
 # you have to pass a model.matrix object to glmnet functions: dataset and functional form
-X <- model.matrix(full_model, medicaid)
+#X <- data.matrix(df)
+X <- model.matrix(full_model, df)
 n <- length(y)
 
 ## LASSO WITH ALPHA = 1
@@ -132,11 +147,141 @@ n <- length(y)
 cv1 <- cv.glmnet(X, y, 
                  family = "binomial", 
                  nfold = 10, 
-                 alpha = 1)
+                 alpha = 1,
+                 standardize = TRUE)
 plot(cv1) # viz cv
- 
- 
- 
- 
+# left line is minimum value of lambda, right line is one s.d. from minimum
+# the plot shows us that the information loss is quite variable: the red dots show us information loss
+# at every log of lambda. We want the value that MINIMIZES info loss
+
+
+# Fit the model
+# lambda replaces nfold
+lassomod <- glmnet(X, y, 
+                   family = "binomial", 
+                   lambda = cv1$lambda.min,  # call minimum lambda value stored in the cv1 object
+                   alpha = 1,
+                   standardize= TRUE)
+
+coefplot(lassomod)
+ggsave("model1_allstates.png", dpi = 500)
+
+######### MODEL 2 ALL STATES 2018
+df_2018 <- subset(df, year == 2018)
+
+model2 <- lm(expanded_medicaid ~ . -expanded_medicaid -state -year -population, data = df_2018)
+
+# store outcome variable
+y <- df_2018$expanded_medicaid
+# you have to pass a model.matrix object to glmnet functions: dataset and functional form
+#X <- data.matrix(df)
+X <- model.matrix(model2, df_2018)
+n <- length(y)
+
+cv2 <- cv.glmnet(X, y, 
+                 family = "binomial", 
+                 nfold = 10, 
+                 alpha = 1,
+                 standardize = TRUE)
+plot(cv2) # viz cv
+# left line is minimum value of lambda, right line is one s.d. from minimum
+# the plot shows us that the information loss is quite variable: the red dots show us information loss
+# at every log of lambda. We want the value that MINIMIZES info loss
+
+# Fit the model
+# lambda replaces nfold
+lassomod2 <- glmnet(X, y, 
+                    family = "binomial", 
+                    lambda = cv2$lambda.min,  # call minimum lambda value stored in the cv1 object
+                    alpha = 1,
+                    standardize= TRUE)
+
+coefplot(lassomod2)
+ggsave("model2_allstates_2018.png", dpi = 500)
+
+##### MODEL 3 ALL YEARS
+adopted <- read_csv("medicaid-expansion-outcome.csv")
+df_trun <- df %>% left_join(adopted, by = c("state" = "State"))%>% 
+  rename(c("Expanded 2014" = "expanded_2014",
+           "Expanded 2019" = "expanded_2019"))
+df_trun <- filter(df_trun, expanded_2014 == 0) %>% select(-c(expanded_2014, expanded_2019))
+
+trun_model <- lm(expanded_medicaid ~ . -expanded_medicaid -state -year, data = df_trun)
+
+# store outcome variable
+y <- df_trun$expanded_medicaid
+# you have to pass a model.matrix object to glmnet functions: dataset and functional form
+#X <- data.matrix(df)
+X <- model.matrix(trun_model, df_trun)
+n <- length(y)
+
+cv3 <- cv.glmnet(X, y, 
+                 family = "binomial", 
+                 nfold = 10, 
+                 alpha = 1,
+                 standardize = TRUE)
+plot(cv3) # viz cv
+# left line is minimum value of lambda, right line is one s.d. from minimum
+# the plot shows us that the information loss is quite variable: the red dots show us information loss
+# at every log of lambda. We want the value that MINIMIZES info loss
+
+# Fit the model
+# lambda replaces nfold
+lassomod3 <- glmnet(X, y, 
+                   family = "binomial", 
+                   lambda = cv3$lambda.min,  # call minimum lambda value stored in the cv1 object
+                   alpha = 1,
+                   standardize= TRUE)
+
+coefplot(lassomod3)
+ggsave("model3_og_states.png", dpi = 500)
+
+##### MODEL 4 OG 2018
+adopted <- read_csv("medicaid-expansion-outcome.csv")
+df_trun <- df %>% left_join(adopted, by = c("state" = "State"))%>% 
+  rename(c("Expanded 2014" = "expanded_2014",
+           "Expanded 2019" = "expanded_2019"))
+df_trun <- filter(df_trun, expanded_2014 == 0) %>% select(-c(expanded_2014, expanded_2019))
+df_trun <- subset(df_trun, year == 2018)
+
+trun_model <- lm(expanded_medicaid ~ . -expanded_medicaid -state -year, data = df_trun)
+
+# store outcome variable
+y <- df_trun$expanded_medicaid
+# you have to pass a model.matrix object to glmnet functions: dataset and functional form
+#X <- data.matrix(df)
+X <- model.matrix(trun_model, df_trun)
+n <- length(y)
+
+cv4 <- cv.glmnet(X, y, 
+                 family = "binomial", 
+                 nfold = 10, 
+                 alpha = 1,
+                 standardize = TRUE)
+plot(cv4) # viz cv
+# left line is minimum value of lambda, right line is one s.d. from minimum
+# the plot shows us that the information loss is quite variable: the red dots show us information loss
+# at every log of lambda. We want the value that MINIMIZES info loss
+
+# Fit the model
+# lambda replaces nfold
+lassomod4 <- glmnet(X, y, 
+                    family = "binomial", 
+                    lambda = cv4$lambda.min,  # call minimum lambda value stored in the cv1 object
+                    alpha = 1,
+                    standardize= TRUE)
+
+coefplot(lassomod4)
+ggsave("model4_og_2018.png", dpi = 500)
+
+
+
+
+
+
+
+
+
+
  
  
