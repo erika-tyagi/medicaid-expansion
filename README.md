@@ -1,4 +1,4 @@
-# medicaid-expansion
+## medicaid-expansion
 
   ### [medicaid_analysis.R](medicaid_analysis.R)
    - Reads in, cleans and analyzes the raw data
