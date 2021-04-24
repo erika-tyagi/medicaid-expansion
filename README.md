@@ -1,5 +1,8 @@
 ## medicaid-expansion
+Our project seeks to explain the varied success seen by Medicaid expansion campaigns across states.
 
+  ### [Final Paper](final_paper.pdf)
+  
   #### [medicaid_analysis.R](medicaid_analysis.R)
    - Reads in, cleans and analyzes the raw data
   
